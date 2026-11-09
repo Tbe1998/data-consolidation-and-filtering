@@ -80,6 +80,12 @@ def cache_vals(block):
     return [d.get(i) for i in range(max(d) + 1)]
 
 
+def natkey(name):
+    """测点自然排序：DL2 排在 DL10 前面。"""
+    return [int(t) if t.isdigit() else str(t).lower()
+            for t in re.split(r"(\d+)", str(name))]
+
+
 def series_of(s):
     out = []
     for m in re.finditer(r"<c:ser>.*?</c:ser>", s, re.S):
@@ -223,6 +229,16 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
             parsed.append(dict(raw=s, title=title, ser=series_of(s), axs=axes_of(s)))
         is_time = any(fnmatch.fnmatch(name, p) for p in time_sheets)
 
+        # 时程图按测点自然顺序重新分组（1、2、3…10，而不是 1、10、11…2）
+        counts = [len(c["ser"]) for c in parsed]
+        if is_time and counts and min(counts) > 1:
+            allser = sorted([sp for c in parsed for sp in c["ser"]],
+                            key=lambda sp: natkey(sp["name"]))
+            i = 0
+            for c, sz in zip(parsed, counts):
+                c["ser"] = allser[i:i + sz]
+                i += sz
+
         # 同组纵轴统一：跨度 ≥ 组内最大跨度 40% 的图共用一套范围
         ymin = [min(float(v) for sp in c["ser"] for v in sp["y"]
                     if v not in (None, "")) for c in parsed if c["ser"]]
@@ -260,7 +276,7 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
                 mx = max(abs(own[0]), abs(own[1])) or 1.0
                 # 同组共用轴范围；但量程太小、或共用后曲线占比 <1/2.6 的图，
                 # 保留自身范围（原模板的“量程保护”推广到新规则）
-                if span >= 0.4 * max_span and (g_hi - g_lo) / mx <= 2.5 + 1e-6:
+                if span >= 0.4 * max_span:
                     lo, hi, step = g_lo, g_hi, g_step
                 else:
                     lo, hi, step = data_range(*own)
