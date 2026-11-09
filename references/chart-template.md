@@ -143,6 +143,23 @@ X 轴上限规则（用户 2026-11 明确要求）：从 **1.5×峰值** 起向�
 负值：下限按 **1.5×|最小值|** 向下取整到 5 的倍数（如 −1.73 → −5），自动化测斜管口
 （深度 1~3 m）常出现负值，按 0 起画会把管口段裁掉。渲染函数在保存前必须断言
 「所有绘制点 ∈ [lo, hi]」，越界就自动扩轴并告警——不要靠人眼看。
+```python
+def x_axis_range(xmin, xmax):
+    need = 1.5 * xmax
+    hi = 10 * int(math.ceil(need / 10.0))
+    if hi < need:
+        hi += 10
+    if hi > 2.5 * xmax and hi - 10 >= need:
+        hi -= 10
+    hi = max(hi, 10)
+    lo = -5 * int(math.ceil(1.5 * abs(xmin) / 5.0)) if xmin < 0 else 0
+    return lo, hi
+
+lo, hi = x_axis_range(min(xs), max(xs))
+ax.set_xlim(lo, hi)
+assert all(lo <= x <= hi for x in xs), "有数据点越出 X 轴"
+```
+
 
 110 二期 X3# 井 10 个孔的实测结果（曲线数 5~9）：
 
