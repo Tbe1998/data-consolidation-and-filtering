@@ -20,6 +20,7 @@
 | `scripts/pick_representatives.py` | 代表点抽样：按度量分位等距 / 按时间等距 |
 | `scripts/xlsx_chart_uniform.py` | 批量统一 Excel 内嵌图表版式，数据零改动（零依赖） |
 | `scripts/xlsx_charts_to_png.py` | 按报告图幅（186×56 / 90×210 mm）导出 PNG（需 matplotlib） |
+| `scripts/pick_profile_curves.py` | 深度剖面曲线数量自适应：插值重构误差 + 重复剔除（零依赖） |
 | `references/chart-template.md` | 监测曲线模板：规格、谁抄谁、量程保护、校验清单、踩坑 |
 | `examples/chart_uniform.example.json` | 套版式配置示例（分组 / 基准图 / 图例改日期） |
 | `examples/sample_long.csv` | 带冲突、空值、非法值的样例长表 |
@@ -65,6 +66,19 @@ python3 scripts/xlsx_charts_to_png.py 曲线图_统一版式.xlsx out/png \
 脚本只搬外观（绘图区几何、图例块、轴刻度、标题格式），不搬身份（轴 ID、轴标题文字、
 图名文字、数据）。自带 `<c:numCache>` 零改动校验。完整模板与踩坑见
 [`references/chart-template.md`](references/chart-template.md)。
+
+### 深度剖面曲线：数量按位移发展自适应
+
+测斜孔有几十上百期时，固定 6 条曲线会漏掉中段转折，全画又糊。用插值重构误差决定张数：
+
+```bash
+python3 scripts/pick_profile_curves.py tst2.csv --format text
+# 实测 131 期 → 选 9 期  峰值 27.5 mm（2024-11-08）
+# 阈值 2.75 mm，最大重构误差 2.43 mm
+```
+
+首测/末测/峰值必选，中间只补「线性插值还原不出来的」期次，相邻剖面差 <1.5 mm 视为重复。
+110 二期 X3# 井 10 个孔自动得到 5~9 条，峰值曲线加粗标红、峰值后用虚线即可保持清爽。
 
 ## 核心结论（正文里都有展开）
 
