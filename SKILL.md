@@ -185,7 +185,7 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
 **深度剖面别固定条数**：测斜这类「深度 × 日期」矩阵，用
 `scripts/pick_profile_curves.py` 按线性插值重构误差自动定张数（首/末/峰值必选，
 相邻剖面差 <1.5 mm 视为重复），实测 10 个孔得到 5~9 条，都比硬取 6 条更贴合发展过程。
-出图时峰值曲线加粗标红、峰值后用虚线、只在首/峰/末打标记，8~9 条也不糊。
+出图时峰值曲线加粗（一律实线，不用虚线），9 色 + 空心异形标记，首/峰/末打标记，8~9 条也不糊。
 
 **只抄外观，不抄身份**：绘图区几何 / 图例块 / 轴刻度 / 标题格式 ← 基准图；
 `axId`、轴标题文字、图名文字、数据 ← 本图。复制图例时必须删 `<c:legendEntry>`。
@@ -205,22 +205,6 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
 **必须校验**：逐图比对输出与源的 `<c:numCache>`（脚本退出码 2 = 有图被改动），
 再核对图名集合、组内样式唯一、PNG 抽检。完整模板、规格尺寸、踩坑清单见
 [`references/chart-template.md`](references/chart-template.md)。
-
-## 坑
-
-- **容器里常常没有 `unzip` / `libreoffice`**：解包用 `zipfile`，读老 `.xls`
-  （OLE2，文件头 `D0 CF 11 E0`）用 `xlrd`，openpyxl 读不了。
-- **`/tmp/inspect.py` 会遮蔽标准库 `inspect`**，导致 `xlrd` 导入报
-  partially initialized module。脚本名加前缀。
-- **中文文件名 scp 会失败**：`ssh host "cd dir && tar cf - ." | tar xf - -C dest`。
-- **matplotlib 中文出豆腐块**：无中文字体的环境里图内文字用英文，Excel 表内保持中文。
-- **散点图** `Series(y=深度, x=位移)` 且 `y_axis.scaling.orientation="maxMin"`
-  才能让深度向下增；写反会得到一条贯穿全图的对角斜线。
-- **不要给缺失补 0**：`没测` 和 `测得 0` 在趋势判断上是两回事。
-- **图表 XML 的 `chartN.xml` 编号不可硬编码**：换一版文件就错位，
-  按 `workbook → sheet rels → drawing rels → chart rels` 解析。
-- **替换轴后必须重取 `axes(s)`**：每替换一个 `valAx`，后续轴的字符偏移都会变。
-- **matplotlib 中文只有 500 字重**：`fontweight="bold"` 会刷 `findfont` 警告，不影响出图。
 
 ## 9. 一条龙交付：曲线图 + 三张表
 
@@ -244,3 +228,18 @@ python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.
 [`references/delivery-workflow.md`](references/delivery-workflow.md)；
 图表版式的 XML 级细节见 [`references/chart-template.md`](references/chart-template.md)。
 
+## 坑
+
+- **容器里常常没有 `unzip` / `libreoffice`**：解包用 `zipfile`，读老 `.xls`
+  （OLE2，文件头 `D0 CF 11 E0`）用 `xlrd`，openpyxl 读不了。
+- **`/tmp/inspect.py` 会遮蔽标准库 `inspect`**，导致 `xlrd` 导入报
+  partially initialized module。脚本名加前缀。
+- **中文文件名 scp 会失败**：`ssh host "cd dir && tar cf - ." | tar xf - -C dest`。
+- **matplotlib 中文出豆腐块**：无中文字体的环境里图内文字用英文，Excel 表内保持中文。
+- **散点图** `Series(y=深度, x=位移)` 且 `y_axis.scaling.orientation="maxMin"`
+  才能让深度向下增；写反会得到一条贯穿全图的对角斜线。
+- **不要给缺失补 0**：`没测` 和 `测得 0` 在趋势判断上是两回事。
+- **图表 XML 的 `chartN.xml` 编号不可硬编码**：换一版文件就错位，
+  按 `workbook → sheet rels → drawing rels → chart rels` 解析。
+- **替换轴后必须重取 `axes(s)`**：每替换一个 `valAx`，后续轴的字符偏移都会变。
+- **matplotlib 中文只有 500 字重**：`fontweight="bold"` 会刷 `findfont` 警告，不影响出图。
