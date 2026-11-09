@@ -193,6 +193,9 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
 **量程保护**：本图原量程 < 基准的 40% 就保留本图刻度，否则曲线被拉平（轴力图常见）。
 其余按基准 `majorUnit` 逐格外扩包住数据。
 
+**测斜联动**：`scripts/xlsx_inclinometer_link.py` 给每个孔加「选点XX」——日期下拉 + INDEX/MATCH 取剖面
++ 散点图绑定，改日期或改数即重绘；记得 `fullCalcOnLoad=True`。
+
 **按图分块**：先按测点前缀分类、类内自然排序、每 5 点一张图；`_groups.json` 给出每图测点，
 用它把「图 + 绘图数据」逐块嵌进工作簿（每块上图为 186×56 mm、下表日期为行、测点为列）。
 
