@@ -1,10 +1,10 @@
 ---
 name: data-consolidation-and-filtering
-description: "Use when 批量表格汇总成宽表或列表筛选去重。含口径·抽样·校验·图表套版式。"
-version: 1.1.0
+description: "Use when 批量表格汇总成宽表或列表筛选去重，或要按模板批量出监测曲线图并交付四件套。含口径·抽样·校验·图表套版式。"
+version: 1.2.0
 license: MIT
 metadata:
-  tags: [Data, Excel, ETL, Aggregation, Filtering, Sampling, Validation]
+  tags: [Data, Excel, ETL, Aggregation, Filtering, Sampling, Validation, Charts, Monitoring]
 ---
 
 # 数据汇总 / 处理 / 筛选 方法论
@@ -193,9 +193,6 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
 **量程保护**：本图原量程 < 基准的 40% 就保留本图刻度，否则曲线被拉平（轴力图常见）。
 其余按基准 `majorUnit` 逐格外扩包住数据。
 
-**测斜联动**：`scripts/xlsx_inclinometer_link.py` 给每个孔加「选点XX」——日期下拉 + INDEX/MATCH 取剖面
-+ 散点图绑定，改日期或改数即重绘；记得 `fullCalcOnLoad=True`。
-
 **按图分块**：先按测点前缀分类、类内自然排序、每 5 点一张图；`_groups.json` 给出每图测点，
 用它把「图 + 绘图数据」逐块嵌进工作簿（每块上图为 186×56 mm、下表日期为行、测点为列）。
 
@@ -224,3 +221,26 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
   按 `workbook → sheet rels → drawing rels → chart rels` 解析。
 - **替换轴后必须重取 `axes(s)`**：每替换一个 `valAx`，后续轴的字符偏移都会变。
 - **matplotlib 中文只有 500 字重**：`fontweight="bold"` 会刷 `findfont` 警告，不影响出图。
+
+## 9. 一条龙交付：曲线图 + 三张表
+
+监测类项目最终要交 4 个文件：曲线图（PDF/PNG）、数据汇总表、筛选后数据汇总表、各点最大累计值汇总表。
+全流程三个脚本，中间只认 `_groups.json`：
+
+```bash
+# 1) 套版式（Excel 内嵌图表零改数）
+python3 scripts/xlsx_chart_uniform.py 原图.xlsx 统一版式.xlsx -c chart.json
+# 2) 重绘 PNG（分类分块 + 自然序 + 9 色空心标记），产出 _groups.json
+python3 scripts/xlsx_charts_to_png.py 统一版式.xlsx out/png --dpi 220
+# 3) 四件套
+python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.json \
+    --charts out/png --incl out/incl --sel 选点说明.json --title "<项目>" --out deliverables
+```
+
+`make_delivery.py` 产出：`_数据汇总表.xlsx`（全量）、`_筛选后数据汇总表.xlsx`（按图分块：上图下表）、
+`_各点最大累计值汇总表.xlsx`（含出现日期/深度）、`_曲线图.pdf`（封面+4 张/页+1 页/孔）、`_曲线图_PNG.zip`。
+
+完整规格（轴规则、配色标记、分块命名、校验清单、10 条坑）见
+[`references/delivery-workflow.md`](references/delivery-workflow.md)；
+图表版式的 XML 级细节见 [`references/chart-template.md`](references/chart-template.md)。
+

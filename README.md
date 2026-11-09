@@ -21,7 +21,9 @@
 | `scripts/xlsx_chart_uniform.py` | 批量统一 Excel 内嵌图表版式，数据零改动（零依赖） |
 | `scripts/xlsx_charts_to_png.py` | 按报告图幅（186×56 / 90×210 mm）导出 PNG（需 matplotlib） |
 | `scripts/pick_profile_curves.py` | 深度剖面曲线数量自适应：插值重构误差 + 重复剔除（零依赖） |
+| `scripts/make_delivery.py` | 一条龙交付：曲线 PDF + 数据汇总表 + 筛选后（图+数据）+ 各点最大累计值 |
 | `references/chart-template.md` | 监测曲线模板：规格、谁抄谁、量程保护、校验清单、踩坑 |
+| `references/delivery-workflow.md` | 完整交付工作流：轴规则、配色标记、分类分块、校验清单、10 条坑 |
 | `examples/chart_uniform.example.json` | 套版式配置示例（分组 / 基准图 / 图例改日期） |
 | `examples/sample_long.csv` | 带冲突、空值、非法值的样例长表 |
 | `examples/demo.py` | 两种抽样模式的效果对比 |
