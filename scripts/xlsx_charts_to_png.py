@@ -25,6 +25,7 @@
 
 import argparse
 import datetime
+import json
 import fnmatch
 import math
 import os
@@ -218,6 +219,7 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
            time_sheets=("图1*",), only=None, debug=False):
     os.makedirs(outdir, exist_ok=True)
     index = []
+    groups_out = []
     for name, charts in load_sheets(src):
         if name == "说明" or not charts:
             continue
@@ -229,15 +231,28 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
             parsed.append(dict(raw=s, title=title, ser=series_of(s), axs=axes_of(s)))
         is_time = any(fnmatch.fnmatch(name, p) for p in time_sheets)
 
-        # 时程图按测点自然顺序重新分组（1、2、3…10，而不是 1、10、11…2）
+        # 时程图：先按测点前缀分类（DL/JS/…），类内自然排序（1、2、3…10），每图 ≤5 点
         counts = [len(c["ser"]) for c in parsed]
         if is_time and counts and min(counts) > 1:
-            allser = sorted([sp for c in parsed for sp in c["ser"]],
-                            key=lambda sp: natkey(sp["name"]))
-            i = 0
-            for c, sz in zip(parsed, counts):
-                c["ser"] = allser[i:i + sz]
-                i += sz
+            allser = [sp for c in parsed for sp in c["ser"]]
+            tpl = parsed[0]
+            base = re.sub(r"\s*\d+-\d+\s*$", "", tpl["title"]).strip()
+            classes, order = {}, []
+            for sp in allser:
+                m = re.match(r"[A-Za-z]+", sp["name"])
+                cls = m.group(0).upper() if m else ""
+                if cls not in classes:
+                    classes[cls] = []
+                    order.append(cls)
+                classes[cls].append(sp)
+            newp = []
+            for cls in order:
+                sps = sorted(classes[cls], key=lambda sp: natkey(sp["name"]))
+                for i in range(0, len(sps), 5):
+                    chunk = sps[i:i + 5]
+                    t = "%s %s~%s" % (base, chunk[0]["name"], chunk[-1]["name"])
+                    newp.append(dict(raw=tpl["raw"], title=t, ser=chunk, axs=tpl["axs"]))
+            parsed = newp
 
         # 同组纵轴统一：跨度 ≥ 组内最大跨度 40% 的图共用一套范围
         ymin = [min(float(v) for sp in c["ser"] for v in sp["y"]
@@ -293,15 +308,26 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
                     assert min(ys) >= lo and max(ys) <= hi, c["title"] + " 有数据越界"
 
             safe = re.sub(r"[/\\]", "-", c["title"])
-            fn = "{}{}.png".format(safe, " %d-%d" % (k, len(parsed)) if len(parsed) > 1 else "")
+            fn = "{}{}.png".format(safe, " %d-%d" % (k, len(parsed))
+                                   if len(parsed) > 1 and "~" not in safe else "")
             fig.savefig(os.path.join(outdir, fn), dpi=dpi, facecolor="white")
             plt.close(fig)
             index.append((len(index) + 1, name, c["title"], fn, w, h))
+            if is_time:
+                base_d = datetime.date(1899, 12, 30)
+                xs = [sp["x"] for sp in ser if sp["x"]]
+                dates = [str(base_d + datetime.timedelta(days=int(float(v)))) for v in xs[0]] if xs else []
+                groups_out.append(dict(sheet=name, title=c["title"], file=fn,
+                                       points=[sp["name"] for sp in ser],
+                                       dates=dates,
+                                       series={sp["name"]: sp["y"] for sp in ser}))
 
     with open(os.path.join(outdir, "_index.txt"), "w", encoding="utf-8") as fh:
         fh.write("序号\t工作表\t图名\t文件\t图幅mm\n")
         for i, sh, t, fn, w, h in index:
             fh.write("%02d\t%s\t%s\t%s\t%dx%d\n" % (i, sh, t, fn, w, h))
+    with open(os.path.join(outdir, "_groups.json"), "w", encoding="utf-8") as fh:
+        json.dump(groups_out, fh, ensure_ascii=False)
     return index
 
 
