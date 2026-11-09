@@ -1,7 +1,7 @@
 ---
 name: data-consolidation-and-filtering
-description: "Use when 批量表格汇总成宽表或列表筛选去重。含口径·抽样·校验。"
-version: 1.0.0
+description: "Use when 批量表格汇总成宽表或列表筛选去重。含口径·抽样·校验·图表套版式。"
+version: 1.1.0
 license: MIT
 metadata:
   tags: [Data, Excel, ETL, Aggregation, Filtering, Sampling, Validation]
@@ -169,6 +169,32 @@ if not new: return                        # 静默 = 不打扰
 - 源数据异常单独列（僵尸表、重复实体、稀疏点、整项隐藏、口径降级），标明「已在说明页记录」。
 - 附件命名带范围：`<项目>_<起>-<止>.xlsx`。
 
+## 8. 图表批量统一版式（Excel 内嵌图表）
+
+一堆图要「照着我调好的第一张改」，别手点。`.xlsx` 是 zip，图表在 `xl/charts/chartN.xml`，
+改 XML 比逐个开图快两个数量级，而且数据可以做到零改动。
+
+```bash
+python3 scripts/xlsx_chart_uniform.py --init 曲线图.xlsx > chart.json   # 看结构
+# 编辑 groups：哪些页一组、ref 指向手调好的那张
+python3 scripts/xlsx_chart_uniform.py 曲线图.xlsx 输出.xlsx -c chart.json
+python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
+    --dpi 220 --time-size 186x56 --incl-size 90x210
+```
+
+**只抄外观，不抄身份**：绘图区几何 / 图例块 / 轴刻度 / 标题格式 ← 基准图；
+`axId`、轴标题文字、图名文字、数据 ← 本图。复制图例时必须删 `<c:legendEntry>`。
+
+**量程保护**：本图原量程 < 基准的 40% 就保留本图刻度，否则曲线被拉平（轴力图常见）。
+其余按基准 `majorUnit` 逐格外扩包住数据。
+
+**图名清洗**：先删 `1/4` 这类序号，再删结尾的 `（mm）`——单位常躲在序号前面。
+说明页的清单在 `sharedStrings.xml`，单位可能在字符串中间，用非锚定正则。
+
+**必须校验**：逐图比对输出与源的 `<c:numCache>`（脚本退出码 2 = 有图被改动），
+再核对图名集合、组内样式唯一、PNG 抽检。完整模板、规格尺寸、踩坑清单见
+[`references/chart-template.md`](references/chart-template.md)。
+
 ## 坑
 
 - **容器里常常没有 `unzip` / `libreoffice`**：解包用 `zipfile`，读老 `.xls`
@@ -180,3 +206,7 @@ if not new: return                        # 静默 = 不打扰
 - **散点图** `Series(y=深度, x=位移)` 且 `y_axis.scaling.orientation="maxMin"`
   才能让深度向下增；写反会得到一条贯穿全图的对角斜线。
 - **不要给缺失补 0**：`没测` 和 `测得 0` 在趋势判断上是两回事。
+- **图表 XML 的 `chartN.xml` 编号不可硬编码**：换一版文件就错位，
+  按 `workbook → sheet rels → drawing rels → chart rels` 解析。
+- **替换轴后必须重取 `axes(s)`**：每替换一个 `valAx`，后续轴的字符偏移都会变。
+- **matplotlib 中文只有 500 字重**：`fontweight="bold"` 会刷 `findfont` 警告，不影响出图。

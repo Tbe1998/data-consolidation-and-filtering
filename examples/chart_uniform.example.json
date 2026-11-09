@@ -1,0 +1,27 @@
+{
+  "_comment": "示例：曲线图套版式配置。先用 --init 生成草稿，再把同组工作表合并进一个 group；ref=0 表示该组第一张图是基准（用户手调好的那张）。",
+  "strip_units": true,
+  "strip_index": true,
+  "axis_min_span_ratio": 0.4,
+  "clean_strings": {
+    "contains": ["[数据页"],
+    "strip_index": true,
+    "strip_units": true
+  },
+  "groups": [
+    {"name": "地表沉降", "sheets": ["图1 地表沉降"], "ref": 0},
+    {"name": "管线沉降", "sheets": ["图1 管线沉降"], "ref": 0},
+    {"name": "支撑轴力", "sheets": ["图1 支撑轴力(本次测值)"], "ref": 0},
+    {
+      "name": "测斜",
+      "sheets": [
+        "图2 测斜TST1", "图2 测斜TST2", "图2 测斜TST3", "图2 测斜TST4",
+        "图2 测斜ZDH-CX1", "图2 测斜ZDH-CX2",
+        "图2 测斜ZQT1", "图2 测斜ZQT2", "图2 测斜ZQT3", "图2 测斜ZQT4"
+      ],
+      "ref": 0,
+      "rename": {"位移-深度曲线": "时程曲线图"},
+      "legend_dates": {"row": 2, "from_col": 2, "count": 6}
+    }
+  ]
+}
