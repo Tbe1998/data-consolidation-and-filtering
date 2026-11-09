@@ -3,11 +3,19 @@
 """把 Excel 里的内嵌图表按指定图幅重绘成 PNG（需要 matplotlib）。
 
 用途：Excel/Origin 里的曲线图要排进报告，但直接截图分辨率不够、比例不统一。
-这里读 chart XML 里的缓存数据自行绘制，图幅、字体、图例位置可控。
+这里读 chart XML 里的缓存数据自行绘制，图幅、字体、图例位置、坐标轴范围可控。
 
 图幅约定（工程报告常用，可改）：
     时程图  186 x 56 mm   →  A4 通栏一条（220 dpi 约 1610 x 484 px）
     测斜图   90 x 210 mm  →  A4 半栏通高（220 dpi 约 779 x 1818 px）
+
+样式约定（2026-11 起）：
+    - 所有曲线实线；9 色互不相近（Okabe-Ito 扩展）；每条曲线专属空心标记，
+      黑白打印也能对上日期；
+    - 纵轴范围按数据动态计算：1.5×极值起、向上取整到 nice 步长，落在 1.5~2.5 倍；
+      有负值时下限同步外扩，绝不裁掉曲线；
+    - 同组（同一工作表）曲线共用纵轴范围；量程不足组内最大跨度 40% 的图
+      （如轴力后几张）保留自身范围，避免被压成直线——这是原模板既定规则。
 
 用法：
     python3 scripts/xlsx_charts_to_png.py 曲线图.xlsx out/png
@@ -18,6 +26,7 @@
 import argparse
 import datetime
 import fnmatch
+import math
 import os
 import re
 import zipfile
@@ -29,8 +38,10 @@ import matplotlib.dates as mdates                    # noqa: E402
 from matplotlib.ticker import FuncFormatter          # noqa: E402
 from matplotlib import font_manager as fm            # noqa: E402
 
-MK = {"circle": "o", "square": "s", "triangle": "^", "diamond": "D",
-      "x": "x", "plus": "P", "star": "*", "dash": "_"}
+# 9 种色相/明度都拉开的颜色（色盲友好，黑白打印靠标记形状区分）
+COLORS = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9",
+          "#D55E00", "#7B5EA7", "#8C564B", "#000000"]
+MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*", "h"]
 
 
 # ---------------------------------------------------------------- 解析
@@ -77,14 +88,9 @@ def series_of(s):
         name = re.findall(r"<c:v>([^<]*)</c:v>", tx.group(0))[-1] if tx else ""
         xb = re.search(r"<c:xVal>.*?</c:xVal>", b, re.S)
         yb = re.search(r"<c:yVal>.*?</c:yVal>", b, re.S)
-        col = re.search(r'<a:srgbClr val="([0-9A-Fa-f]{6})"/>', b)
-        mk = re.search(r'<c:symbol val="(\w+)"/>', b)
-        out.append(dict(
-            name=name,
-            x=cache_vals(xb.group(0)) if xb else [],
-            y=cache_vals(yb.group(0)) if yb else [],
-            color="#" + col.group(1) if col else "#2E5C8A",
-            marker=mk.group(1) if mk else "circle"))
+        out.append(dict(name=name,
+                        x=cache_vals(xb.group(0)) if xb else [],
+                        y=cache_vals(yb.group(0)) if yb else []))
     return out
 
 
@@ -127,26 +133,44 @@ def legend_pos(s):
 
 
 def is_inclinometer(s, axes):
-    """测斜图的判据：深度轴 maxMin（深度向下增）或轴位置在左且纵轴标题含深度。"""
     if any(a["orient"] == "maxMin" for a in axes):
         return True
     return any((a["title"] or "").startswith("深度") for a in axes)
 
 
-# ---------------------------------------------------------------- 绘图
+# ---------------------------------------------------------------- 轴范围
 
-def fnum(step):
+def nice_num(x):
+    """把 x 收成 1/2/5×10^n 的“好看”数。"""
+    if x <= 0:
+        return 1.0
+    exp = math.floor(math.log10(x))
+    base = 10.0 ** exp
+    f = x / base
+    for m in (1, 2, 5, 10):
+        if f <= m + 1e-12:
+            return m * base
+    return 10 * base
+
+
+def data_range(vmin, vmax):
+    """按 1.5×极值定上下限，步长取 nice 数，保证 1.5~2.5 倍且不裁曲线。"""
+    hi_raw = 1.5 * vmax if vmax > 0 else 0.0
+    lo_raw = -1.5 * abs(vmin) if vmin < 0 else 0.0
+    step = nice_num((hi_raw - lo_raw) / 8.0)
+    hi = math.ceil(hi_raw / step - 1e-9) * step if hi_raw else 0.0
+    lo = math.floor(lo_raw / step + 1e-9) * step if lo_raw else 0.0
+    if hi == lo:                    # 全 0 的图
+        hi, lo = step, 0.0
+    return lo, hi, step
+
+
+def fmt_step(step):
     if step >= 1:
         return FuncFormatter(lambda v, _: "{:,.0f}".format(v))
     if step >= 0.1:
         return FuncFormatter(lambda v, _: "{:,.1f}".format(v))
     return FuncFormatter(lambda v, _: "{:,.2f}".format(v))
-
-
-def ticks(lo, hi, st, cap=26):
-    n = int(round((hi - lo) / st)) if st else 8
-    n = max(1, min(n, cap))
-    return [round(lo + i * (hi - lo) / n, 6) for i in range(n + 1)]
 
 
 def frame(ax, grid="y"):
@@ -182,45 +206,81 @@ def mm(v):
     return v / 25.4
 
 
+# ---------------------------------------------------------------- 绘图
+
 def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
-           time_sheets=("图1*",), only=None):
+           time_sheets=("图1*",), only=None, debug=False):
     os.makedirs(outdir, exist_ok=True)
     index = []
     for name, charts in load_sheets(src):
         if name == "说明" or not charts:
             continue
-        for k, s in enumerate(charts, 1):
+        parsed = []
+        for s in charts:
             title = (re.findall(r"<a:t>([^<]*)</a:t>",
                                 re.search(r"<c:title>.*?</c:title>", s, re.S).group(0))[0]
                      if re.search(r"<c:title>.*?</c:title>", s, re.S) else name)
-            if only and not re.search(only, title):
+            parsed.append(dict(raw=s, title=title, ser=series_of(s), axs=axes_of(s)))
+        is_time = any(fnmatch.fnmatch(name, p) for p in time_sheets)
+
+        # 同组纵轴统一：跨度 ≥ 组内最大跨度 40% 的图共用一套范围
+        ymin = [min(float(v) for sp in c["ser"] for v in sp["y"]
+                    if v not in (None, "")) for c in parsed if c["ser"]]
+        ymax = [max(float(v) for sp in c["ser"] for v in sp["y"]
+                    if v not in (None, "")) for c in parsed if c["ser"]]
+        spans = [b - a for a, b in zip(ymin, ymax)] if ymin else [0]
+        max_span = max(spans) if spans else 0
+        if ymin:
+            g_lo, g_hi, g_step = data_range(min(ymin), max(ymax))
+        else:
+            g_lo, g_hi, g_step = 0.0, 1.0, 0.2
+
+        for k, c in enumerate(parsed, 1):
+            if only and not re.search(only, c["title"]):
                 continue
-            ser = series_of(s)
-            axs = axes_of(s)
-            incl = is_inclinometer(s, axs) or not any(
-                fnmatch.fnmatch(name, p) for p in time_sheets)
-            pr = rect(s, "plotArea")
-            lg = rect(s, "legend")
-            lp = legend_pos(s)
+            ser, axs = c["ser"], c["axs"]
+            incl = is_inclinometer(c["raw"], axs) or not is_time
+            pr = rect(c["raw"], "plotArea")
+            lg = rect(c["raw"], "legend")
+            lp = legend_pos(c["raw"])
             w, h = incl_size if incl else time_size
             fig = plt.figure(figsize=(mm(w), mm(h)))
-
             if pr:
-                pr = (pr[0], 1 - pr[1] - pr[3], pr[2], pr[3])   # y 轴翻到 matplotlib 坐标
-            if incl and pr and pr[0] < 0.10:                     # 左侧留给深度轴标题
+                pr = (pr[0], 1 - pr[1] - pr[3], pr[2], pr[3])
+            if incl and pr and pr[0] < 0.10:
                 pr = (0.10, pr[1], pr[0] + pr[2] - 0.10, pr[3])
             ax = fig.add_axes(pr if pr else (0.10, 0.24, 0.84, 0.56))
 
             if incl:
-                _draw_incl(ax, fig, ser, axs, title, pr, lg, lp)
+                _draw_incl(ax, fig, ser, axs, c["title"], pr, lg, lp)
             else:
-                _draw_time(ax, ser, axs, title, lp)
+                ys = [float(v) for sp in ser for v in sp["y"] if v not in (None, "")]
+                own = (min(ys), max(ys)) if ys else (0, 1)
+                span = own[1] - own[0]
+                mx = max(abs(own[0]), abs(own[1])) or 1.0
+                # 同组共用轴范围；但量程太小、或共用后曲线占比 <1/2.6 的图，
+                # 保留自身范围（原模板的“量程保护”推广到新规则）
+                if span >= 0.4 * max_span and (g_hi - g_lo) / mx <= 2.5 + 1e-6:
+                    lo, hi, step = g_lo, g_hi, g_step
+                else:
+                    lo, hi, step = data_range(*own)
+                if ys and (min(ys) < lo or max(ys) > hi):      # 兜底，绝不裁
+                    lo, hi, step = data_range(min(min(ys), lo), max(max(ys), hi))
+                    print("!! %s 轴范围不足，已扩展为 %g~%g" % (c["title"], lo, hi))
+                if debug and ys:
+                    mx = max(abs(min(ys)), abs(max(ys))) or 1
+                    print("  %-42s data %8.2f~%8.2f  axis %8.2f~%8.2f  step %7.2f  ratio %.2f"
+                          % (c["title"][-24:], min(ys), max(ys), lo, hi, step,
+                             (hi - lo) / mx))
+                _draw_time(ax, ser, axs, c["title"], lp, lo, hi, step)
+                if ys:
+                    assert min(ys) >= lo and max(ys) <= hi, c["title"] + " 有数据越界"
 
-            safe = re.sub(r"[/\\]", "-", title)
-            fn = "{}{}.png".format(safe, " %d-%d" % (k, len(charts)) if len(charts) > 1 else "")
+            safe = re.sub(r"[/\\]", "-", c["title"])
+            fn = "{}{}.png".format(safe, " %d-%d" % (k, len(parsed)) if len(parsed) > 1 else "")
             fig.savefig(os.path.join(outdir, fn), dpi=dpi, facecolor="white")
             plt.close(fig)
-            index.append((len(index) + 1, name, title, fn, w, h))
+            index.append((len(index) + 1, name, c["title"], fn, w, h))
 
     with open(os.path.join(outdir, "_index.txt"), "w", encoding="utf-8") as fh:
         fh.write("序号\t工作表\t图名\t文件\t图幅mm\n")
@@ -229,10 +289,10 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
     return index
 
 
-def _draw_time(ax, ser, axs, title, lp):
+def _draw_time(ax, ser, axs, title, lp, lo, hi, step):
     base = datetime.date(1899, 12, 30)
     allx = []
-    for sp in ser:
+    for i, sp in enumerate(ser):
         xs, ys = [], []
         for xv, yv in zip(sp["x"], sp["y"]):
             if xv in (None, "") or yv in (None, ""):
@@ -242,28 +302,27 @@ def _draw_time(ax, ser, axs, title, lp):
         if not xs:
             continue
         allx += xs
-        ax.plot(xs, ys, color=sp["color"], lw=1.5,
-                marker=MK.get(sp["marker"], "o"), ms=3.2, mfc=sp["color"],
-                mec="white", mew=0.6, label=sp["name"], zorder=3,
-                markevery=max(1, len(xs) // 10))
+        col = COLORS[i % len(COLORS)]
+        ax.plot(xs, ys, color=col, lw=1.5, ls="-",
+                marker=MARKERS[i % len(MARKERS)], ms=3.8,
+                mfc="white", mec=col, mew=0.8, label=sp["name"], zorder=3,
+                markevery=max(1, len(xs) // 8))
     if not allx:
         return
-    ax.axhline(0, color="#C9C9C9", lw=0.8, zorder=1)
+    if lo < 0 < hi:
+        ax.axhline(0, color="#C9C9C9", lw=0.8, zorder=1)
     frame(ax, "y")
-    ya = axs[1] if len(axs) > 1 else axs[0]
-    if ya["mn"] and ya["mx"]:
-        lo, hi = float(ya["mn"]), float(ya["mx"])
-        st = float(ya["mu"]) if ya["mu"] else (hi - lo) / 5
-        ax.set_ylim(lo, hi)
-        ax.set_yticks(ticks(lo, hi, st))
-        ax.yaxis.set_major_formatter(fnum(st))
+    ax.set_ylim(lo, hi)
+    ax.set_yticks([lo + i * step for i in range(int(round((hi - lo) / step)) + 1)])
+    ax.yaxis.set_major_formatter(fmt_step(step))
     ax.set_xlim(min(allx), max(allx))
     span = (max(allx) - min(allx)).days
     ax.xaxis.set_major_locator(mdates.AutoDateLocator(
         minticks=3, maxticks=7, interval_multiples=True))
     ax.xaxis.set_major_formatter(
         mdates.DateFormatter("%Y/%m" if span > 300 else "%Y/%m/%d"))
-    ax.set_ylabel(ya["title"] or "累计变化量（mm）", fontsize=7, color="#595959", labelpad=6)
+    ax.set_ylabel((axs[1]["title"] if len(axs) > 1 else None) or "累计变化量", fontsize=7,
+                  color="#595959", labelpad=6)
     ncol = min(5, max(1, len(ser)))
     if lp == "r":
         ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False,
@@ -278,7 +337,7 @@ def _draw_time(ax, ser, axs, title, lp):
 
 
 def _draw_incl(ax, fig, ser, axs, title, pr, lg, lp):
-    for sp in ser:
+    for i, sp in enumerate(ser):
         xs, ys = [], []
         for xv, yv in zip(sp["x"], sp["y"]):
             if xv in (None, "") or yv in (None, ""):
@@ -287,8 +346,10 @@ def _draw_incl(ax, fig, ser, axs, title, pr, lg, lp):
             ys.append(float(yv))
         if not xs:
             continue
-        ax.plot(xs, ys, color=sp["color"], lw=1.4, marker="o", ms=2.6,
-                mfc=sp["color"], mec="white", mew=0.4, label=sp["name"], zorder=3,
+        col = COLORS[i % len(COLORS)]
+        ax.plot(xs, ys, color=col, lw=1.4, ls="-",
+                marker=MARKERS[i % len(MARKERS)], ms=3.2,
+                mfc="white", mec=col, mew=0.7, label=sp["name"], zorder=3,
                 markevery=max(1, len(xs) // 24))
     frame(ax, "both")
     ax.tick_params(labelsize=6.0, pad=2)
@@ -297,13 +358,13 @@ def _draw_incl(ax, fig, ser, axs, title, pr, lg, lp):
         xlo, xhi = float(xa["mn"]), float(xa["mx"])
         xst = float(xa["mu"]) if xa["mu"] else (xhi - xlo) / 5
         ax.set_xlim(xlo, xhi)
-        ax.set_xticks(ticks(xlo, xhi, xst))
-        ax.xaxis.set_major_formatter(fnum(xst))
+        ax.set_xticks([xlo + i * xst for i in range(int(round((xhi - xlo) / xst)) + 1)])
+        ax.xaxis.set_major_formatter(fmt_step(xst))
         dlo, dhi = float(ya["mn"]), float(ya["mx"])
         dst = float(ya["mu"]) if ya["mu"] else 2
-        ax.set_ylim(dhi, dlo)                       # 深度向下增大
-        ax.set_yticks(ticks(dlo, dhi, dst))
-        ax.yaxis.set_major_formatter(fnum(dst))
+        ax.set_ylim(dhi, dlo)
+        ax.set_yticks([dlo + i * dst for i in range(int(round((dhi - dlo) / dst)) + 1)])
+        ax.yaxis.set_major_formatter(fmt_step(dst))
         ax.set_xlabel(xa["title"] or "位移（mm）", fontsize=6.8, color="#595959", labelpad=3)
         fig.text(0.028, (pr[1] + pr[3] / 2) if pr else 0.5,
                  ya["title"] or "深度（m）", rotation=90, va="center", ha="center",
@@ -339,12 +400,13 @@ def main(argv=None):
     ap.add_argument("--time-sheets", default="图1*", help="按工作表名通配判断时程图，可逗号分隔")
     ap.add_argument("--only", default=None, help="只导出图名匹配该正则的图")
     ap.add_argument("--font", action="append", default=[], help="追加中文字体路径")
+    ap.add_argument("--debug", action="store_true", help="打印每张图的轴范围与倍数")
     a = ap.parse_args(argv)
 
     setup_font(a.font)
     pats = [p.strip() for p in a.time_sheets.split(",") if p.strip()]
     idx = render(a.src, a.outdir, a.dpi, _size(a.time_size), _size(a.incl_size),
-                 tuple(pats), a.only)
+                 tuple(pats), a.only, a.debug)
     print("导出 %d 张 → %s" % (len(idx), a.outdir))
     for i, sh, t, fn, w, h in idx[:5]:
         print("  %02d %s (%gx%gmm)" % (i, fn, w, h))
