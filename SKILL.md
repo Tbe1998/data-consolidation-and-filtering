@@ -224,6 +224,9 @@ python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.
 `make_delivery.py` 产出：`_数据汇总表.xlsx`（全量）、`_筛选后数据汇总表.xlsx`（按图分块：上图下表）、
 `_各点最大累计值汇总表.xlsx`（含出现日期/深度）、`_曲线图.pdf`（封面+4 张/页+1 页/孔）、`_曲线图_PNG.zip`。
 
+**节奏**：日报打包并发出去之后不要停下等指令——立刻接着解析数据、汇总、出四件套，
+把结果和关键极值一起发回；只有缺数据源或口径冲突时才回头问。
+
 完整规格（轴规则、配色标记、分块命名、校验清单、10 条坑）见
 [`references/delivery-workflow.md`](references/delivery-workflow.md)；
 图表版式的 XML 级细节见 [`references/chart-template.md`](references/chart-template.md)。
