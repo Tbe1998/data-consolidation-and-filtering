@@ -276,15 +276,19 @@ def incl_pngs(incl_dir):
 
 
 def find_incl_png(incl_dir, hole):
-    """按孔号找测斜 PNG；不依赖文件名模板，优先「全过程」。找不到返回空串。"""
+    """按孔号找测斜 PNG；用 ASCII 边界匹配，避免 TST1 命中 TST10。"""
     names = incl_pngs(incl_dir)
-    for n in names:
-        if hole in n and '全过程' in n:
+    pat = r'(?<![0-9A-Za-z])' + re.escape(hole) + r'(?![0-9A-Za-z])'
+    pool = [n for n in names if re.search(pat, n)]
+    if not pool:
+        sub = [n for n in names if hole in n]
+        pool = sub if len(sub) == 1 else []
+    if not pool:
+        return ''
+    for n in pool:
+        if '全过程' in n:
             return os.path.join(incl_dir, n)
-    for n in names:
-        if hole in n:
-            return os.path.join(incl_dir, n)
-    return ''
+    return os.path.join(incl_dir, pool[0])
 
 
 # ---------------------------------------------------------------- 4) PDF

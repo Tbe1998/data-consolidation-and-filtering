@@ -59,7 +59,8 @@ python3 "$SKILL_DIR/scripts/preflight.py" --route C --summary 汇总.xlsx --work
 PROJ="<项目名>"; WORK="output/<项目>-curves"; PY=.venv/bin/python
 
 "$PY" "$SKILL_DIR/scripts/xlsx_chart_uniform.py" --init 原图.xlsx > "$WORK/chart.json"
-# 编辑 groups / ref 后再执行；退出码 2 = 图数据被改动，禁止继续
+# chart.json 可直接用（每表一组、ref=第1张）；跨表统一时才编辑 groups/ref
+# 退出码 2 = 图数据被改动，禁止继续
 "$PY" "$SKILL_DIR/scripts/xlsx_chart_uniform.py" 原图.xlsx "$WORK/统一版式.xlsx" -c "$WORK/chart.json"
 # auto 自动区分时程/测斜，测斜落到 png/incl/
 "$PY" "$SKILL_DIR/scripts/xlsx_charts_to_png.py" "$WORK/统一版式.xlsx" "$WORK/png" --dpi 220
