@@ -22,10 +22,16 @@
 ## 1. 输入与前置检查
 
 - 原始曲线工作簿（Excel 内嵌图表）——版式基准来自它；
-- 监测数据汇总（测项宽表 + 测斜矩阵）；
+- 监测数据汇总（测项宽表 + 测斜矩阵，结构见 `agent-runbook.md` §3）；
 - 输出目录：`output/<项目>-curves/`。
 
-先确认三件事，否则后面全白做：
+先跑环境自检，缺依赖就地装，不要带病开工：
+
+```bash
+python3 scripts/preflight.py --route C
+```
+
+再确认三件事，否则后面全白做：
 
 1. **宽表方向**：测项表是「点号→列、日期→行」还是反过来。实测多数是 `A 列点号、第 2 行日期、第 3 行起数据`。
 2. **测斜矩阵**：`A 列深度`、第 2 行日期、第 3 行起数值；表头常是**合并单元格**，先打印前 4 行 + `merged_cells.ranges` 再取列。
@@ -57,8 +63,11 @@ python3 scripts/xlsx_chart_uniform.py 曲线图.xlsx 输出.xlsx -c chart.json
 
 ```bash
 python3 scripts/xlsx_charts_to_png.py 统一版式.xlsx out/png --dpi 220 \
-    --time-size 186x56 --incl-size 90x210 [--debug]
+    --time-size 186x56 --incl-size 90x210 [--time-sheets '图1*'] [--debug]
 ```
+
+默认 `--time-sheets auto`：轴标题是「深度」或 orientation=maxMin 判为测斜，其余判为时程；
+测斜 PNG 落到 `out/png/incl/` 且文件名带「全过程」。自动判错时再用通配符强制指定。
 
 **样式（时程与测斜共用）**
 - 图幅：时程 186×56 mm；测斜 90×210 mm（图例右下、位移轴在顶、深度向下）。
@@ -104,7 +113,7 @@ python3 scripts/xlsx_charts_to_png.py 统一版式.xlsx out/png --dpi 220 \
 python3 scripts/make_delivery.py \
   --summary 汇总.xlsx \
   --groups out/png/_groups.json \
-  --charts out/png --incl out/incl \
+  --charts out/png --incl out/png/incl \
   --sel 选点说明.json \
   --title "110二期X3#井" --out deliverables
 ```
@@ -121,15 +130,19 @@ python3 scripts/make_delivery.py \
 ## 6. 一条龙命令
 
 ```bash
+# 0) 预检（缺依赖先装）
+python3 scripts/preflight.py --route C
 # 1) 统一版式
 python3 scripts/xlsx_chart_uniform.py 原图.xlsx 统一版式.xlsx -c chart.json
-# 2) 重绘 PNG（含 _groups.json）
+# 2) 重绘 PNG（含 _groups.json；测斜自动进 out/png/incl/）
 python3 scripts/xlsx_charts_to_png.py 统一版式.xlsx out/png --dpi 220
 # 3) 测斜选点（需要时）
 python3 scripts/pick_profile_curves.py 测斜.csv --format text
-# 4) 四件套
+# 4) 四件套（--incl 可省，默认取 out/png/incl）
 python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.json \
-    --charts out/png --incl out/incl --sel 选点说明.json --title "<项目>" --out deliverables
+    --charts out/png --incl out/png/incl --sel 选点说明.json --title "<项目>" --out deliverables
+# 5) 验收：必须 FAIL 0 才能交付
+python3 scripts/verify_delivery.py --dir deliverables --title "<项目>" --expect-incl <孔数> --strict
 ```
 
 ---

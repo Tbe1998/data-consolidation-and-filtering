@@ -192,21 +192,37 @@ def frame(ax, grid="y"):
 
 
 def setup_font(extra=None):
+    """注册系统中文字体；找不到时图内中文会变方块，所以尽量多扫几个目录。"""
     cands = list(extra or []) + [
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
         "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
     ]
+    import glob
+    for pat in (os.path.expanduser("~/.fonts/*.tt[fc]"),
+                os.path.expanduser("~/.fonts/*.otf"),
+                os.path.expanduser("~/.local/share/fonts/*"),
+                "/usr/share/fonts/**/*CJK*",
+                "/usr/share/fonts/**/*NotoSansSC*",
+                "/usr/share/fonts/**/*wqy*"):
+        cands.extend(glob.glob(pat, recursive=True))
     for p in cands:
-        if os.path.exists(p):
+        if os.path.exists(p) and "unifont" not in p.lower():
             try:
                 fm.fontManager.addfont(p)
             except Exception:
                 pass
     names = [f.name for f in fm.fontManager.ttflist
-             if "Zen Hei" in f.name or "CJK" in f.name or "YaHei" in f.name]
+             if any(k in f.name for k in ("Zen Hei", "CJK", "YaHei",
+                                          "Noto Sans SC", "Source Han", "SimHei"))]
+    names = list(dict.fromkeys(names))
     plt.rcParams.update({"font.sans-serif": names + ["DejaVu Sans"],
                          "axes.unicode_minus": False, "figure.facecolor": "white"})
+    return names
 
 
 def mm(v):
@@ -216,8 +232,11 @@ def mm(v):
 # ---------------------------------------------------------------- 绘图
 
 def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
-           time_sheets=("图1*",), only=None, debug=False):
+           time_sheets=None, only=None, debug=False, incl_subdir="incl"):
+    """time_sheets=None 时按轴自动判别时程/测斜；给通配符则按工作表名强制指定。"""
     os.makedirs(outdir, exist_ok=True)
+    incl_dir = os.path.join(outdir, incl_subdir) if incl_subdir else outdir
+    os.makedirs(incl_dir, exist_ok=True)
     index = []
     groups_out = []
     for name, charts in load_sheets(src):
@@ -229,7 +248,10 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
                                 re.search(r"<c:title>.*?</c:title>", s, re.S).group(0))[0]
                      if re.search(r"<c:title>.*?</c:title>", s, re.S) else name)
             parsed.append(dict(raw=s, title=title, ser=series_of(s), axs=axes_of(s)))
-        is_time = any(fnmatch.fnmatch(name, p) for p in time_sheets)
+        if time_sheets:
+            is_time = any(fnmatch.fnmatch(name, p) for p in time_sheets)
+        else:                                  # 自动：全组都是深度剖面才算测斜
+            is_time = not all(is_inclinometer(c["raw"], c["axs"]) for c in parsed)
 
         # 时程图：先按测点前缀分类（DL/JS/…），类内自然排序（1、2、3…10），每图 ≤5 点
         counts = [len(c["ser"]) for c in parsed]
@@ -308,11 +330,16 @@ def render(src, outdir, dpi=220, time_size=(186, 56), incl_size=(90, 210),
                     assert min(ys) >= lo and max(ys) <= hi, c["title"] + " 有数据越界"
 
             safe = re.sub(r"[/\\]", "-", c["title"])
-            fn = "{}{}.png".format(safe, " %d-%d" % (k, len(parsed))
-                                   if len(parsed) > 1 and "~" not in safe else "")
-            fig.savefig(os.path.join(outdir, fn), dpi=dpi, facecolor="white")
+            if len(parsed) > 1 and "~" not in safe:
+                safe += " %d-%d" % (k, len(parsed))
+            if incl and "全过程" not in safe:
+                safe += " 全过程"
+            target = incl_dir if incl else outdir
+            fn = safe + ".png"
+            fig.savefig(os.path.join(target, fn), dpi=dpi, facecolor="white")
             plt.close(fig)
-            index.append((len(index) + 1, name, c["title"], fn, w, h))
+            rel = os.path.join(incl_subdir, fn) if incl and incl_subdir else fn
+            index.append((len(index) + 1, name, c["title"], rel, w, h))
             if is_time:
                 base_d = datetime.date(1899, 12, 30)
                 xs = [sp["x"] for sp in ser if sp["x"]]
@@ -439,19 +466,41 @@ def main(argv=None):
     ap.add_argument("--dpi", type=int, default=220)
     ap.add_argument("--time-size", default="186x56", help="时程图图幅 mm，默认 186x56")
     ap.add_argument("--incl-size", default="90x210", help="测斜图图幅 mm，默认 90x210")
-    ap.add_argument("--time-sheets", default="图1*", help="按工作表名通配判断时程图，可逗号分隔")
+    ap.add_argument("--time-sheets", default="auto",
+                    help="按工作表名通配判断时程图（逗号分隔）；auto=按坐标轴自动判别（推荐）")
+    ap.add_argument("--incl-subdir", default="incl",
+                    help="测斜 PNG 子目录名（相对 outdir，默认 incl）；传空串则与平铺")
     ap.add_argument("--only", default=None, help="只导出图名匹配该正则的图")
     ap.add_argument("--font", action="append", default=[], help="追加中文字体路径")
     ap.add_argument("--debug", action="store_true", help="打印每张图的轴范围与倍数")
     a = ap.parse_args(argv)
 
-    setup_font(a.font)
-    pats = [p.strip() for p in a.time_sheets.split(",") if p.strip()]
+    import logging
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
+    fonts = setup_font(a.font)
+    pats = None if a.time_sheets.strip().lower() == "auto" else \
+        tuple(p.strip() for p in a.time_sheets.split(",") if p.strip())
     idx = render(a.src, a.outdir, a.dpi, _size(a.time_size), _size(a.incl_size),
-                 tuple(pats), a.only, a.debug)
-    print("导出 %d 张 → %s" % (len(idx), a.outdir))
+                 pats, a.only, a.debug, a.incl_subdir)
+    n_incl = sum(1 for r in idx if "全过程" in r[3])
+    n_time = len(idx) - n_incl
+    print("导出 %d 张 → %s（时程 %d / 测斜 %d，测斜在 %s/）"
+          % (len(idx), a.outdir, n_time, n_incl, a.incl_subdir or "."))
+    print("中文字体: %s" % ("、".join(fonts[:3]) if fonts else "未找到（图内中文可能成方块）"))
     for i, sh, t, fn, w, h in idx[:5]:
         print("  %02d %s (%gx%gmm)" % (i, fn, w, h))
+    gj = os.path.join(a.outdir, "_groups.json")
+    try:
+        ng = len(json.load(open(gj, encoding="utf-8")))
+    except Exception:
+        ng = 0
+    if ng == 0 and n_incl:
+        print("!! 只有测斜图、没有时程图：可以继续 make_delivery（筛选表只含测斜块）")
+        return 0
+    if ng == 0:
+        print("!! 没有识别出任何时程图（_groups.json 为空）；"
+              "若确有测点-日期曲线，用 --time-sheets '图1*' 指定工作表")
+        return 2
     return 0
 
 

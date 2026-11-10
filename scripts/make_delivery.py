@@ -171,7 +171,7 @@ def build_plotdata(groups, data, out, charts_dir, incl_dir, sel, title):
             keep = list(range(0, len(dates), max(1, len(dates) // 6)))[:6]
         ws = wb.create_sheet(k[:31])
         ws.cell(row=1, column=1, value='%s %s 深层水平位移' % (title, k[2:])).font = Font(bold=True, size=12)
-        png = os.path.join(incl_dir, '%s %s 全过程测斜曲线.png' % (title, k[2:]))
+        png = find_incl_png(incl_dir, k[2:])
         if os.path.exists(png):
             im = XLImage(png)
             im.width = int(90 / 25.4 * 96)
@@ -267,6 +267,26 @@ def build_max(data, out, items):
     wb.save(out)
 
 
+def incl_pngs(incl_dir):
+    """测斜 PNG：文件名须含「全过程」。目录不存在时返回空表而不是抛异常。"""
+    if not incl_dir or not os.path.isdir(incl_dir):
+        return []
+    return sorted(n for n in os.listdir(incl_dir)
+                  if n.endswith('.png') and '全过程' in n)
+
+
+def find_incl_png(incl_dir, hole):
+    """按孔号找测斜 PNG；不依赖文件名模板，优先「全过程」。找不到返回空串。"""
+    names = incl_pngs(incl_dir)
+    for n in names:
+        if hole in n and '全过程' in n:
+            return os.path.join(incl_dir, n)
+    for n in names:
+        if hole in n:
+            return os.path.join(incl_dir, n)
+    return ''
+
+
 # ---------------------------------------------------------------- 4) PDF
 def build_pdf(groups, charts_dir, incl_dir, out, title, dpi=220):
     mm = dpi / 25.4
@@ -285,7 +305,7 @@ def build_pdf(groups, charts_dir, incl_dir, out, title, dpi=220):
     d = ImageDraw.Draw(cover)
     d.text((int(PW * 0.1), int(PH * 0.28)), title, fill='#1F1F1F', font=font(64))
     d.text((int(PW * 0.1), int(PH * 0.28) + 100), '监测曲线图', fill='#1F1F1F', font=font(64))
-    n_incl = len([f for f in os.listdir(incl_dir) if f.endswith('.png') and '全过程' in f])
+    n_incl = len(incl_pngs(incl_dir))
     d.text((int(PW * 0.1), int(PH * 0.28) + 230),
            '时程曲线 %d 张 · 测斜全过程曲线 %d 张' % (len(files), n_incl),
            fill='#555555', font=font(34))
@@ -303,9 +323,7 @@ def build_pdf(groups, charts_dir, incl_dir, out, title, dpi=220):
             y += im.size[1] + int(11 * mm)
         pages.append(page)
 
-    for name in sorted(os.listdir(incl_dir)):
-        if not name.endswith('.png') or '全过程' not in name:
-            continue
+    for name in incl_pngs(incl_dir):
         im = Image.open(os.path.join(incl_dir, name))
         w, h = int(90 * mm), int(210 * mm)
         page = Image.new('RGB', (PW, PH), 'white')
@@ -322,9 +340,7 @@ def build_zip(groups, charts_dir, incl_dir, out, title):
     for i, g in enumerate(groups, 1):
         dst = '%02d_%s' % (i, g['file'])
         rows.append([i, '时程曲线', g['title'], dst, '186x56', os.path.join(charts_dir, g['file'])])
-    for name in sorted(os.listdir(incl_dir)):
-        if not name.endswith('.png') or '全过程' not in name:
-            continue
+    for name in incl_pngs(incl_dir):
         rows.append([len(rows) + 1, '测斜全过程曲线', name[:-4], '%02d_%s' % (len(rows) + 1, name),
                      '90x210', os.path.join(incl_dir, name)])
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -341,7 +357,8 @@ def main():
     ap.add_argument('--summary', required=True)
     ap.add_argument('--groups', required=True, help='_groups.json')
     ap.add_argument('--charts', required=True, help='时程 PNG 目录')
-    ap.add_argument('--incl', required=True, help='测斜 PNG 目录')
+    ap.add_argument('--incl', default=None,
+                    help='测斜 PNG 目录（文件名须含“全过程”）；缺省自动找 <charts>/incl')
     ap.add_argument('--sel', default=None, help='选点说明 JSON')
     ap.add_argument('--units', default=None, help='{"工作表名":"单位"} 覆盖自动判断')
     ap.add_argument('--title', default='监测项目')
@@ -351,6 +368,20 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     data = load_summary(a.summary)
     groups = json.load(open(a.groups, encoding='utf-8'))
+    if not isinstance(groups, list):
+        raise SystemExit('--groups 必须是 _groups.json 的数组；收到 %s' % type(groups).__name__)
+
+    charts_dir = a.charts
+    incl_dir = a.incl
+    if not incl_dir:
+        cand = os.path.join(charts_dir, 'incl')
+        incl_dir = cand if os.path.isdir(cand) else charts_dir
+    if not os.path.isdir(incl_dir):
+        print('WARN 测斜目录不存在：%s（PDF/PNG 包将不含测斜全过程曲线）' % incl_dir)
+    if not incl_pngs(incl_dir):
+        print('WARN %s 下没有文件名含“全过程”的 PNG，测斜曲线不会进交付件' % incl_dir)
+    if not groups:
+        print('WARN _groups.json 为空：筛选后汇总表将没有时程图块')
     sel_raw = json.load(open(a.sel, encoding='utf-8')) if a.sel else []
     sel = {r['孔号']: r['选定日期'] for r in sel_raw} if sel_raw else {}
 
@@ -365,6 +396,12 @@ def main():
         items[k] = unit_of(k)
     if a.units:
         items.update(json.load(open(a.units, encoding='utf-8')))
+    if not items:
+        raise SystemExit('汇总表里没有识别到测项宽表。要求：第 2 行 = “点号” + 首个日期(YYYY-MM-DD)，'
+                         '第 3 行起为数据；详见 references/agent-runbook.md')
+
+    n_incl = len(incl_pngs(incl_dir))
+    print('识别: 测项 %d 个 / 时程图 %d 张 / 测斜图 %d 张' % (len(items), len(groups), n_incl))
 
     p_sum = os.path.join(a.out, '%s_数据汇总表.xlsx' % a.title)
     p_plot = os.path.join(a.out, '%s_筛选后数据汇总表.xlsx' % a.title)
@@ -373,10 +410,10 @@ def main():
     p_zip = os.path.join(a.out, '%s_曲线图_PNG.zip' % a.title)
 
     build_summary_xlsx(data, p_sum, items)
-    build_plotdata(groups, data, p_plot, a.charts, a.incl, sel, a.title)
+    build_plotdata(groups, data, p_plot, charts_dir, incl_dir, sel, a.title)
     build_max(data, p_max, items)
-    n_pages = build_pdf(groups, a.charts, a.incl, p_pdf, a.title)
-    n_png = build_zip(groups, a.charts, a.incl, p_zip, a.title)
+    n_pages = build_pdf(groups, charts_dir, incl_dir, p_pdf, a.title)
+    n_png = build_zip(groups, charts_dir, incl_dir, p_zip, a.title)
     print('数据汇总表 %s' % p_sum)
     print('筛选后汇总 %s' % p_plot)
     print('最大累计值 %s' % p_max)

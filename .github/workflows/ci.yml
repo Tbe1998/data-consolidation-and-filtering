@@ -17,6 +17,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: compile
         run: python -m py_compile scripts/*.py examples/demo.py tests/*.py
+      - name: install deps for delivery smoke
+        run: python -m pip install openpyxl pillow
+      - name: preflight (route A)
+        run: python scripts/preflight.py --route A
       - name: unit tests
         run: python -m unittest discover -s tests -v
       - name: smoke run
@@ -24,3 +28,6 @@ jobs:
           python scripts/long_to_wide.py examples/sample_long.csv /tmp/wide.csv
           python examples/demo.py
           test -s /tmp/wide.csv
+          python scripts/verify_delivery.py --help > /dev/null
+          python scripts/preflight.py --route C --json > /tmp/preflight.json || true
+          python -c "import json;json.load(open('/tmp/preflight.json'))"

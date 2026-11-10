@@ -1,7 +1,7 @@
 ---
 name: data-consolidation-and-filtering
 description: "Use when 批量表格汇总成宽表或列表筛选去重，或要按模板批量出监测曲线图并交付四件套。含口径·抽样·校验·图表套版式。"
-version: 1.2.0
+version: 1.3.0
 license: MIT
 metadata:
   tags: [Data, Excel, ETL, Aggregation, Filtering, Sampling, Validation, Charts, Monitoring]
@@ -11,15 +11,100 @@ metadata:
 
 跨领域通用的四件事：**长表→宽表汇总**、**字段清洗与口径统一**、**条件筛选与去重**、
 **抽样与校验**。适用于把一个目录的同构报表合成一张总表，也适用于从接口/列表页里
-筛出关心的条目并持续跟踪。
+筛出关心的条目并持续跟踪，以及把 Excel 内嵌曲线图批量套版式、出「曲线图 + 三张表」交付包。
 
-## 何时用
+## 0. 执行协议（agent 必读）
 
-- 一堆同构文件（日报/月度表/导出的 CSV）要合成一张「实体×时间」宽表。
-- 要从长列表/接口里按条件筛出条目并持续跟踪。
-- 要「抽几条代表数据」去画图或汇报，结果曲线挤成一团。
+这一节是硬约束：**先选定路线，再预检，再按命令跑，最后必须过验收**。
+操作细节、输入样例、失败处理见 [`references/agent-runbook.md`](references/agent-runbook.md)，
+路线 C 开工前必须读一遍。
 
-## 0. 先定口径，再动代码
+### 0.1 定位技能目录（不要依赖 cwd）
+
+`skill_view` 返回的 `_source_path` 去掉 `/SKILL.md` 就是技能目录。后续命令一律用绝对路径：
+
+```bash
+SKILL_DIR=/opt/data/skills/productivity/data-consolidation-and-filtering   # 换成实际路径
+```
+
+### 0.2 选路线
+
+| 用户要什么 | 路线 | 关键脚本 | 必交产物 |
+|---|---|---|---|
+| 一批同构报表 → 一张「实体×时间」总表 | **A 汇总** | `long_to_wide.py`（零依赖） | 宽表 + 明细 + 说明页 |
+| 从列表/接口按条件筛条目、持续跟踪 | **B 筛选** | 按 §4 自写筛选 + 状态去重 | 命中清单 + 增量状态 |
+| 按模板出曲线图、四件套、曲线图+三张表 | **C 交付** | `xlsx_chart_uniform.py` → `xlsx_charts_to_png.py` → `make_delivery.py` | 5 个文件（§9） |
+
+路线 C 需要**原始 Excel 内嵌图表工作簿**；只有数据表时走 A，不要假装能套版式。
+
+### 0.3 预检（阻塞项非 0 不许开工）
+
+```bash
+python3 "$SKILL_DIR/scripts/preflight.py" --route C --summary 汇总.xlsx --workbook 原图.xlsx
+```
+
+`--summary` 会实际打开工作簿核对表头，`--workbook` 会数内嵌图表数量；正式交付建议带上。
+
+- 退出码 0：开工。WARN 可接受（如无中文字体，图内中文可能成方块）。
+- 退出码 1：按输出 `fix` 装依赖后重跑。典型：
+  ```bash
+  python3 -m venv .venv && .venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      openpyxl pillow matplotlib
+  ```
+  装完统一用 `.venv/bin/python` 跑后续脚本。
+
+### 0.4 路线 C 的固定五步
+
+```bash
+PROJ="<项目名>"; WORK="output/<项目>-curves"; PY=.venv/bin/python
+
+"$PY" "$SKILL_DIR/scripts/xlsx_chart_uniform.py" --init 原图.xlsx > "$WORK/chart.json"
+# 编辑 groups / ref 后再执行；退出码 2 = 图数据被改动，禁止继续
+"$PY" "$SKILL_DIR/scripts/xlsx_chart_uniform.py" 原图.xlsx "$WORK/统一版式.xlsx" -c "$WORK/chart.json"
+# auto 自动区分时程/测斜，测斜落到 png/incl/
+"$PY" "$SKILL_DIR/scripts/xlsx_charts_to_png.py" "$WORK/统一版式.xlsx" "$WORK/png" --dpi 220
+"$PY" "$SKILL_DIR/scripts/make_delivery.py" --summary 汇总.xlsx \
+    --groups "$WORK/png/_groups.json" --charts "$WORK/png" --sel "$WORK/sel.json" \
+    --title "$PROJ" --out "$WORK/deliverables"
+"$PY" "$SKILL_DIR/scripts/verify_delivery.py" --dir "$WORK/deliverables" --title "$PROJ" \
+    --expect-incl <孔数> --strict
+```
+
+- **不要把 `--incl` 指向空目录**：不传时自动用 `<charts>/incl`；旧模板要求文件名含「全过程」，
+  新版导出脚本已自动补。
+- 第 2 步退出码 2 = 没识别出时程图 → 用 `--time-sheets '图1*'` 显式指定工作表。
+- 第 5 步退出码 2 = 有 FAIL，**不得交付**；按 FAIL 行修复后重跑。
+
+### 0.5 输入与输出契约（摘要）
+
+汇总工作簿必须满足：测项表 `第2行 A=点号, B=YYYY-MM-DD`；测斜表 `A列=深度` 且表名以
+`测斜` 开头。完整结构、`_groups.json` / `sel.json` 的 JSON 契约见
+[`references/agent-runbook.md`](references/agent-runbook.md) §3–§5。
+
+交付目录必须有且仅有 5 类文件：
+
+```
+<项目>_数据汇总表.xlsx            <项目>_曲线图.pdf
+<项目>_筛选后数据汇总表.xlsx      <项目>_曲线图_PNG.zip
+<项目>_各点最大累计值汇总表.xlsx
+```
+
+### 0.6 完成报告（先结果后做法）
+
+必须包含：交付件与页/张数、测项/测点/孔数与日期区间、关键极值（含点号/日期/深度）、
+`verify_delivery` 的 FAIL/WARN 计数、源数据异常。模板见 runbook §10。
+
+### 0.7 硬约束
+
+- 缺数据源、口径冲突、项目名不确定 → **停下来问**，不猜、不拼、不自己起名。
+- 没测 ≠ 测得 0：空就是空，不补 0、不插值。
+- 重复主键不静默覆盖，冲突必须留痕。
+- 不改验收判据来「让它通过」；不用截图/占位图冒充 PNG。
+- 只有 verify 通过（FAIL 0）才算完成，不能只交「脚本跑完了」。
+
+---
+
+## 1. 先定口径，再动代码
 
 开工前必须问清（问错了后面全部返工）：
 
@@ -30,7 +115,7 @@ metadata:
 | 缺失是**真的没有**还是**没测** | 决定留空、补 0 还是标注断档 |
 | 重复日期怎么处理 | 后写覆盖先写、还是两条都留 |
 
-## 1. 汇总：长表 → 宽表
+## 2. 汇总：长表 → 宽表
 
 ```
 行 = 实体（点号 / 孔号 / 门店 / 型号）
@@ -44,10 +129,10 @@ metadata:
 2. **长表（明细）**：`实体, 日期, 值, 来源文件` —— 出问题时唯一能追溯的东西。
 3. **说明页**：口径、规则、异常清单、完整性检查。
 
-`scripts/long_to_wide.py` 是这条流程的最小可用实现（零依赖）：
+`scripts/long_to_wide.py` 是最小可用实现（零依赖）：
 
 ```bash
-python3 scripts/long_to_wide.py long.csv wide.csv \
+python3 "$SKILL_DIR/scripts/long_to_wide.py" long.csv wide.csv \
     --entity 点号 --date 日期 --value 累计变化量 --precision 3
 # → wide.csv（实体×日期） + wide_conflicts.csv（覆盖留痕）
 ```
@@ -66,7 +151,7 @@ for f in files:
 分组（按项目/按首次出现日期分组）时可以在组间插标题行，但**读回时必须以
 「首列非数值即 break」收尾**，否则下方的注释块会被当成数据，画图会出现贯穿全图的直线。
 
-## 2. 处理：清洗与口径统一
+## 3. 处理：清洗与口径统一
 
 - **主键归一**：去首尾空格、换行、全角空格；保留大小写差异（`ZQT1` 与 `zqt1` 先确认是不是同一个）。
 - **同名不同物**：`'建筑物倾斜'` 与 `'建筑物倾斜  '`（尾随空格）是**两张不同的表**，
@@ -80,15 +165,15 @@ for f in files:
 - **重复实体检测**：两条序列重叠日期 ≥80% 且其中 ≥95% 数值相同 → 判为同一实体的两套记录
   （人工表 vs 自动化表），写进备注列，**不要静默合并**。
 
-## 3. 筛选
+## 4. 筛选
 
-### 3.1 关键词门控
+### 4.1 关键词门控
 
 用「地区 × 主题 × 动作」三个条件**全部命中**才留，避免召回噪音：
 
 ```python
-if '某区' not in title:                 continue
-if '建设工程' not in title and '工程师' not in title: continue
+if '某区' not in title:                                  continue
+if '建设工程' not in title and '工程师' not in title:    continue
 ```
 
 - 在**自家站点**（地区名不会出现在标题里）要关掉地区条件，否则全被过滤光。
@@ -96,7 +181,7 @@ if '建设工程' not in title and '工程师' not in title: continue
 - 接口带 `keyword` 参数时先验证语义：**不少政务/人才站的关键词是精确匹配**，
   传半个词返回 0 条、传空才返回全量 → 正确做法是拉全量再本地 `in` 判断。
 
-### 3.2 滚动窗口陷阱（公告 / 榜单类）
+### 4.2 滚动窗口陷阱（公告 / 榜单类）
 
 平台列表常常只保留最近 N 条（例：某职称公示列表约 7 天、150 条），过期条目掉出列表，
 但详情页长期可用。因此：
@@ -105,14 +190,14 @@ if '建设工程' not in title and '工程师' not in title: continue
 - 轮询周期 ≤ 窗口长度 / 3（7 天窗口 → 2 小时足够，别用每天一次）；
 - 再挂一个**持久列表**作兜底源（结果公布页、归档页），防止长时间停机漏事件。
 
-### 3.3 数值筛选
+### 4.3 数值筛选
 
 - 「最大值」先明确是**绝对值最大**还是**代数最大**：位移/沉降要看绝对值，保留符号输出。
 - 同一数值多期重复出现时取**最早**一期（首次达到）。
 - 单位不同不能放同一列比较（mm / ‰ / kN），分表或在单位列标明。
 - 精度按单位给：mm 3 位、‰ 5 位（0.0024 这种值按 3 位就抹平了）、kN 2 位。
 
-## 4. 抽样：代表点怎么选
+## 5. 抽样：代表点怎么选
 
 最容易做错的一步：**按序号等距取点**。
 
@@ -129,7 +214,7 @@ from pick_representatives import pick
 dates, amp = pick({date: [values...]}, k=6, mode="metric")   # mode="time" 切换
 ```
 
-跑 `python3 examples/demo.py` 看差别：
+跑 `python3 "$SKILL_DIR/examples/demo.py"` 看差别：
 
 | 选法 | 6 个代表点（日期 → 特征值 mm） |
 |---|---|
@@ -140,7 +225,7 @@ dates, amp = pick({date: [values...]}, k=6, mode="metric")   # mode="time" 切�
 用分位/等距取并说明理由，不要真随机。选完把「序号 / 日期 / 特征值 / 量程占比」
 四列附在表下方备查。
 
-## 5. 增量与去重（监控类任务）
+## 6. 增量与去重（监控类任务）
 
 ```python
 state = load(STATE)                       # {"源:id": {"t":..., "u":..., "ts":...}}
@@ -155,19 +240,15 @@ if not new: return                        # 静默 = 不打扰
 - 状态文件按 `ts` 清理（保留 180~400 天），否则无限增长。
 - 无新增时 stdout 为空 —— 配合「空输出不发送」的调度器即可做到零打扰。
 
-## 6. 校验（交出去之前必做）
+## 7. 校验（交出去之前必做）
 
 1. **抽样回源**：随机 2~3 个日期 × 若干实体，逐格与源文件比对，打印 `ok/bad` 计数。
 2. **完整性**：日期数是否等于文件数、有无重复日期、有无整列空、有无断档。
 3. **量级合理性**：最大值、均值、条数与直觉是否一致（突然大 100 倍通常是单位或日期串列）。
 4. **读回验证**：把输出重新打开读一遍，确认注释块没被当数据、合并单元格没串行。
 
-## 7. 交付话术
-
-- 先说**结果**（多少实体 / 多少日期 / 关键极值），再说做法。
-- 用一张小表交代结构，不要把每个实体念一遍。
-- 源数据异常单独列（僵尸表、重复实体、稀疏点、整项隐藏、口径降级），标明「已在说明页记录」。
-- 附件命名带范围：`<项目>_<起>-<止>.xlsx`。
+路线 C 用 `scripts/verify_delivery.py` 做机器验收（见 §0.4 第 5 步），人工抽检 5 条见
+runbook §8。
 
 ## 8. 图表批量统一版式（Excel 内嵌图表）
 
@@ -175,10 +256,9 @@ if not new: return                        # 静默 = 不打扰
 改 XML 比逐个开图快两个数量级，而且数据可以做到零改动。
 
 ```bash
-python3 scripts/xlsx_chart_uniform.py --init 曲线图.xlsx > chart.json   # 看结构
-# 编辑 groups：哪些页一组、ref 指向手调好的那张
-python3 scripts/xlsx_chart_uniform.py 曲线图.xlsx 输出.xlsx -c chart.json
-python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
+python3 "$SKILL_DIR/scripts/xlsx_chart_uniform.py" --init 曲线图.xlsx > chart.json
+python3 "$SKILL_DIR/scripts/xlsx_chart_uniform.py" 曲线图.xlsx 输出.xlsx -c chart.json
+python3 "$SKILL_DIR/scripts/xlsx_charts_to_png.py" 输出.xlsx out/png \
     --dpi 220 --time-size 186x56 --incl-size 90x210
 ```
 
@@ -208,17 +288,16 @@ python3 scripts/xlsx_charts_to_png.py 输出.xlsx out/png \
 
 ## 9. 一条龙交付：曲线图 + 三张表
 
-监测类项目最终要交 4 个文件：曲线图（PDF/PNG）、数据汇总表、筛选后数据汇总表、各点最大累计值汇总表。
-全流程三个脚本，中间只认 `_groups.json`：
+监测类项目最终交 5 个文件（俗称四件套）：曲线图 PDF、数据汇总表、筛选后数据汇总表、
+各点最大累计值汇总表、PNG 包。全流程三个脚本，中间只认 `_groups.json`：
 
 ```bash
-# 1) 套版式（Excel 内嵌图表零改数）
-python3 scripts/xlsx_chart_uniform.py 原图.xlsx 统一版式.xlsx -c chart.json
-# 2) 重绘 PNG（分类分块 + 自然序 + 9 色空心标记），产出 _groups.json
-python3 scripts/xlsx_charts_to_png.py 统一版式.xlsx out/png --dpi 220
-# 3) 四件套
-python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.json \
-    --charts out/png --incl out/incl --sel 选点说明.json --title "<项目>" --out deliverables
+python3 "$SKILL_DIR/scripts/xlsx_chart_uniform.py" 原图.xlsx 统一版式.xlsx -c chart.json
+python3 "$SKILL_DIR/scripts/xlsx_charts_to_png.py" 统一版式.xlsx out/png --dpi 220
+python3 "$SKILL_DIR/scripts/make_delivery.py" --summary 汇总.xlsx \
+    --groups out/png/_groups.json --charts out/png --incl out/png/incl \
+    --sel 选点说明.json --title "<项目>" --out deliverables
+python3 "$SKILL_DIR/scripts/verify_delivery.py" --dir deliverables --title "<项目>" --strict
 ```
 
 `make_delivery.py` 产出：`_数据汇总表.xlsx`（全量）、`_筛选后数据汇总表.xlsx`（按图分块：上图下表）、
@@ -229,16 +308,18 @@ python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.
 
 完整规格（轴规则、配色标记、分块命名、校验清单、10 条坑）见
 [`references/delivery-workflow.md`](references/delivery-workflow.md)；
+执行步骤与失败矩阵见 [`references/agent-runbook.md`](references/agent-runbook.md)；
 图表版式的 XML 级细节见 [`references/chart-template.md`](references/chart-template.md)。
 
-## 坑
+## 10. 坑
 
 - **容器里常常没有 `unzip` / `libreoffice`**：解包用 `zipfile`，读老 `.xls`
   （OLE2，文件头 `D0 CF 11 E0`）用 `xlrd`，openpyxl 读不了。
 - **`/tmp/inspect.py` 会遮蔽标准库 `inspect`**，导致 `xlrd` 导入报
   partially initialized module。脚本名加前缀。
 - **中文文件名 scp 会失败**：`ssh host "cd dir && tar cf - ." | tar xf - -C dest`。
-- **matplotlib 中文出豆腐块**：无中文字体的环境里图内文字用英文，Excel 表内保持中文。
+- **matplotlib 中文出豆腐块**：无中文字体的环境里图内文字用英文，Excel 表内保持中文；
+  新版 `xlsx_charts_to_png.py` 会扫 `~/.fonts`、Noto CJK、文泉驿等，仍找不到时用 `--font` 指定。
 - **散点图** `Series(y=深度, x=位移)` 且 `y_axis.scaling.orientation="maxMin"`
   才能让深度向下增；写反会得到一条贯穿全图的对角斜线。
 - **不要给缺失补 0**：`没测` 和 `测得 0` 在趋势判断上是两回事。
@@ -246,3 +327,5 @@ python3 scripts/make_delivery.py --summary 汇总.xlsx --groups out/png/_groups.
   按 `workbook → sheet rels → drawing rels → chart rels` 解析。
 - **替换轴后必须重取 `axes(s)`**：每替换一个 `valAx`，后续轴的字符偏移都会变。
 - **matplotlib 中文只有 500 字重**：`fontweight="bold"` 会刷 `findfont` 警告，不影响出图。
+- **测斜 PNG 不叫「全过程」会被交付脚本漏掉**：`make_delivery` 只认文件名含「全过程」的图；
+  新版导出脚本会自动补，手工放图时必须遵守。
